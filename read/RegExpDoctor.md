@@ -157,5 +157,7 @@ hijack函数在运行时对该模块的全局变量_restore赋值.将被改写�
 ## listener是Set<RegexDoctor>,为什么?难道说在分析正则的过程中,会创建多个regexDoctor实例来分析吗
 
 ## 在哪里触发存储(dump)数据的
-1. src/register.ts exitHook(), doctor.stop 显式调用dump写入文件
-2. 
+1. src/register.ts exitHook(), 
+2. doctor.stop后 显式调用dump写入文件
+
+## 如何存储

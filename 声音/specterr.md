@@ -296,3 +296,207 @@ export const decorateAudioFrequency = (spectrumFrequency, magnitudeTargetMax, ex
 
 ### PreviewDisplay.jsx
 因为最后导出的是视频,右侧预览是pixi绘制canvas实时预览的,猜测,就是在这里接受频率数据进行绘制的.而且我只查到了`getCurrentBassFrequency`的使用,全局下没有看到对`getCurrentWideFrequency`,猜测,只使用了低频特征来表现动画节奏.另外低频一般是鼓点的所在区域,的确是适用于节奏的绘制
+
+### animate
+PreviewDisplay.jsx
+```js
+    animate = (self) => {
+        const { videoSettings, playingPreview, previewPositionDragging, appliedPlaybackTime, audioWaiting } = self.props;
+
+        if (!(audioWaiting && playingPreview) || previewPositionDragging) {
+            const calculatedTime = ((performance.now() - this.startTime) / 1000 + appliedPlaybackTime);
+
+            let targetFrequencies = videoSettings.visualizer.waveType === WAVE_TYPE.WIDE_SPECTRUM
+                ? RealtimeAudioAnalyzer.getHistoricalWideFrequencies(playingPreview || previewPositionDragging)
+                : RealtimeAudioAnalyzer.getHistoricalBassFrequencies(playingPreview || previewPositionDragging);
+
+            let currentBassFrequency = RealtimeAudioAnalyzer.getCurrentBassFrequency();
+            self.pipeline?.draw(targetFrequencies, currentBassFrequency, calculatedTime, playingPreview);
+        }
+
+        FpsCounter.triggerFrame();
+
+        if (playingPreview)
+            self.animationRequest = window.requestAnimationFrame(() => self.animate(self));
+    }
+```
+getHistoricalWideFrequencies
+```js
+// Returns the array with current and past frequencies for bass audio
+const getHistoricalBassFrequencies = (includeNextFrame = true) => {
+  if (
+    !includeNextFrame &&
+    Boolean(window.realtimeAnalyzerContext.historicalBassFrequencies.length)
+  )
+    return window.realtimeAnalyzerContext.historicalBassFrequencies;
+
+  let currentBassFrequency = getCurrentBassFrequency();
+
+  concatHistoricalFrequencies(
+    currentBassFrequency,
+    window.realtimeAnalyzerContext.historicalBassFrequencies,
+    AudioAnalyzerConstants.HistoricalFrequenciesLimit
+  );
+
+  return window.realtimeAnalyzerContext.historicalBassFrequencies;
+};
+```
+concatHistoricalFrequencies
+```js
+
+// This function builds the chain of frequencies.
+// The current one and few past frequencies (for layers delay)
+const concatHistoricalFrequencies = (
+  currentFrequency,
+  historicalFrequencies,
+  limit
+) => {
+  // Insert the new item at the beginning.
+  historicalFrequencies.unshift(currentFrequency);
+
+  // If the array is not full, insert the same item to the end.
+  if (historicalFrequencies.length < limit) {
+    for (let i = historicalFrequencies.length; i < limit; i++) {
+      historicalFrequencies.push(currentFrequency);
+    }
+    return historicalFrequencies;
+  }
+
+  // If the array is over the limit, remove old items to fit the limit.
+  if (historicalFrequencies.length > limit) {
+    historicalFrequencies.splice(limit, historicalFrequencies.length - limit);
+    return historicalFrequencies;
+  }
+
+  return historicalFrequencies;
+};
+```
+targetFrequency currentBassFrquency
+![alt text](image-1.png)
+
+targetFrequency是可以根据设置选择bass / wide
+currentBassFrequency一直获取的bass
+
+### draw
+```js
+ draw(data, bassData, playbackTime, playingPreview) {
+    this.renderElements.background.draw(bassData);
+    this.renderElements.particles.draw(bassData);
+    this.renderElements.visualizer.draw(data, bassData, playingPreview);
+    this.renderElements.lyrics.draw(playbackTime);
+    this.renderElements.youTubeCta?.draw(playingPreview);
+  }
+```
+bassData节奏鼓点来震动background / particles
+playbackTime 播放时间来控制lyrics(歌词)
+playingPreview(正在播放预览) 来控制是否展示visualizer和youtubeCta(YouTube CTA 按钮)
+
+### particle
+发光效果用的不是滤镜,而是精灵图
+
+### visualizer (WaveCircle.js)
+- data 历史频率数据(bass / wide)
+- bassData
+- playingPreview boolean
+
+#### 发光特效
+```js
+addGlowEffect(multiplier) {
+    this.bloomFilter = new PIXIFilters.AdvancedBloomFilter({
+      threshold: 0.01,
+      quality: 10,
+    });
+    this.glowContainer.filters.push(this.bloomFilter);
+    this.bloomFilter.padding = 100 * multiplier;
+  }
+```
+#### 火焰位移纹理
+```js
+addFireEffect(multiplier) {
+    this.displacementSprite = new PIXI.Sprite();
+    this.displacementSprite.texture = PIXI.Texture.from(
+      "https://specterr.b-cdn.net/fire-texture.jpg"
+    );
+    this.displacementSprite.texture.baseTexture.wrapMode =
+      PIXI.WRAP_MODES.MIRRORED_REPEAT;
+    this.displacementFilter = new PIXI.filters.DisplacementFilter(
+      this.displacementSprite
+    );
+    this.displacementSprite.x -= 500;
+    this.displacementFilter.padding = 110 * multiplier;
+
+    this.visualsContainer.addChild(this.displacementSprite);
+    this.glowContainer.filters.push(this.displacementFilter);
+    this.waveContainer.filters.push(this.displacementFilter);
+  }
+```
+#### 多层重叠阴影
+```js
+addDropShadowEffect(multiplier) {
+    const shadowSettings = {
+      quality: 10,
+      distance: 0,
+    };
+    this.glowShadowFilter1 = new PIXIFilters.DropShadowFilter(shadowSettings);
+    this.glowShadowFilter2 = new PIXIFilters.DropShadowFilter(shadowSettings);
+    this.waveShadowFilter1 = new PIXIFilters.DropShadowFilter(shadowSettings);
+    this.waveShadowFilter2 = new PIXIFilters.DropShadowFilter(shadowSettings);
+
+    this.waveShadowPaddingFilter = new PIXI.filters.AlphaFilter(1);
+    this.waveShadowPaddingFilter.padding = 100 * multiplier;
+
+    this.glowContainer.filters.push(this.glowShadowFilter1);
+    this.glowContainer.filters.push(this.glowShadowFilter2);
+    this.waveContainer.filters.push(this.waveShadowFilter1);
+    this.waveContainer.filters.push(this.waveShadowFilter2);
+
+    this.waveContainer.filters.push(this.waveShadowPaddingFilter);
+  }
+```
+#### wave
+- #### WAVE_STYLE.SOLID
+drawWaveCircle----spectrumToPoints----[PIXI]drawPolygon
+- #### WAVE_STYLE.BAR
+drawWaveCircleBars----spectrumToBarPoints---[PIXI]drawPolygon
+- #### WAVE_STYLE.POINT
+drawWaveCirclePoints----spectrumToPoints---[PIXI]drawCircle
+
+#### 跳动(bounce)
+```js
+if (this.config.bounceEnabled) {
+      const newScale =
+        this.scaleAmount *
+        (1 + (spectrumMagnitude / 255) * this.config.bounceScale);
+      this.logoContainer.scale.set(newScale, newScale);
+      this.visualsContainer.scale.set(newScale, newScale);
+    }
+```
+#### 摇晃(shake)
+```js
+if (this.config.shakeEnabled) {
+      const newXOffset =
+        (this.offset.x + (Math.random() - 0.5) * this.config.shakeFactor) *
+        (spectrumMagnitude / 255);
+      const newYOffset =
+        (this.offset.y + (Math.random() - 0.5) * this.config.shakeFactor) *
+        (spectrumMagnitude / 255);
+
+      this.offset = {
+        x: newXOffset,
+        y: newYOffset,
+      };
+
+      this.logoContainer.x = this.x + newXOffset;
+      this.logoContainer.y = this.y + newYOffset;
+
+      this.visualsContainer.x = this.x + newXOffset;
+      this.visualsContainer.y = this.y + newYOffset;
+    }
+```
+
+#### 旋转(spin)
+```js
+ // No need to spin the visualized when preview is paused.
+    if (this.spinEnabled && isPlaying) this.drawSpin(bassSpectrums);
+
+```
